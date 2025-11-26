@@ -31,6 +31,11 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
+// Root route to check API status
+app.get('/', (req, res) => {
+  res.json({ message: 'API is working right now' });
+});
+
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://admin:<db_password>@ilets-exam-0.bnlsm9u.mongodb.net/?appName=ILETS-EXAM-0', {
   useNewUrlParser: true,
