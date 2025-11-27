@@ -9,6 +9,10 @@ const router = express.Router();
 // Register route
 router.post('/register', async (req, res) => {
   try {
+    console.log('Received req.body:', req.body);
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({ error: 'Invalid request body' });
+    }
     const { centerName, centerAddress, pcName, macAddress, uuid, hostname, platform } = req.body;
 
     // Validation
