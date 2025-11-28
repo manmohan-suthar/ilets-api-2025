@@ -29,11 +29,15 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url} - Content-Type: ${req.headers['content-type']}`);
+  next();
+});
 app.use('/uploads', express.static('uploads'));
 
 // Root route to check API status
 app.get('/', (req, res) => {
-  res.json({ message: 'API is working right now' });
+  res.json({ message: 'API is working right now update v 1.0.0' });
 });
 
 // MongoDB connection
@@ -96,16 +100,29 @@ io.on('connection', (socket) => {
   });
 
   // WebRTC signaling
-  socket.on('offer', (data) => {
+  socket.on('join', ({ room, role }) => {
+    socket.join(room);
+    console.log(`${socket.id} joined ${room} as ${role}`);
+    // notify other peers
+    socket.to(room).emit('peer-joined', { id: socket.id, role });
+  });
+
+  socket.on('offer', data => {
+    // data: { room, sdp, from }
     socket.to(data.room).emit('offer', data);
   });
 
-  socket.on('answer', (data) => {
+  socket.on('answer', data => {
     socket.to(data.room).emit('answer', data);
   });
 
-  socket.on('ice-candidate', (data) => {
-    socket.to(data.room).emit('ice-candidate', data);
+  socket.on('ice', data => {
+    socket.to(data.room).emit('ice', data);
+  });
+
+  socket.on('leave', ({ room }) => {
+    socket.leave(room);
+    socket.to(room).emit('peer-left', { id: socket.id });
   });
 
   socket.on('disconnect', () => {
