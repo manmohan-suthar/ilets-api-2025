@@ -37,7 +37,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Root route to check API status
 app.get('/', (req, res) => {
-  res.json({ message: 'API is working right now update v 1.0.0' });
+  res.json({ message: 'API is working right now update v 1.0.1' });
 });
 
 // MongoDB connection
