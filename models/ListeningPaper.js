@@ -43,6 +43,11 @@ const sectionSchema = new mongoose.Schema({
     required: true,
     min: 1
   },
+  introduction: {
+    type: String,
+    default: '',
+    trim: true
+  },
   audioFile: {
     type: String // path to audio file
   },

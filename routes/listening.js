@@ -2,6 +2,8 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const ListeningPaper = require('../models/ListeningPaper');
+const ListeningResult = require('../models/ListeningResult');
+const ExamAssignment = require('../models/ExamAssignment');
 
 const router = express.Router();
 
@@ -181,6 +183,118 @@ router.post('/:id/upload-audio', upload.single('audio'), async (req, res) => {
     });
   } catch (error) {
     console.error('Upload audio error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Submit listening exam results
+router.post('/:id/submit-results', async (req, res) => {
+  try {
+    const { id } = req.params; // paper id
+    const { studentId, assignmentId, answers } = req.body;
+
+    if (!studentId || !assignmentId || !answers) {
+      return res.status(400).json({
+        error: 'studentId, assignmentId, and answers are required'
+      });
+    }
+
+    // Validate that the assignment exists and matches
+    const assignment = await ExamAssignment.findById(assignmentId);
+    if (!assignment) {
+      return res.status(404).json({ error: 'Exam assignment not found' });
+    }
+
+    console.log('Assignment found:', assignment._id);
+    console.log('Assignment exam_paper:', assignment.exam_paper);
+    console.log('Requested paper id:', id);
+
+    if (assignment.student.toString() !== studentId) {
+      return res.status(403).json({ error: 'Student does not match assignment' });
+    }
+
+    let assignedPaperId;
+    if (typeof assignment.exam_paper === 'string') {
+      assignedPaperId = assignment.exam_paper;
+    } else {
+      assignedPaperId = assignment.exam_paper.listening_exam_paper || assignment.exam_paper.listening || assignment.exam_paper;
+    }
+    console.log('Assigned paper id:', assignedPaperId, 'type:', typeof assignedPaperId);
+    console.log('Assigned paper id toString:', assignedPaperId?.toString());
+
+    if (assignedPaperId.toString() !== id) {
+      console.log('Paper mismatch: assigned', assignedPaperId.toString(), 'vs requested', id);
+      return res.status(400).json({ error: 'Paper does not match assignment' });
+    }
+
+    // Check if result already exists
+    const existingResult = await ListeningResult.findOne({
+      student: studentId,
+      assignment: assignmentId
+    });
+
+    if (existingResult) {
+      return res.status(409).json({ error: 'Results already submitted for this exam' });
+    }
+
+    // Calculate score for multiple choice questions
+    const paper = await ListeningPaper.findById(id);
+    if (!paper) {
+      return res.status(404).json({ error: 'Listening paper not found' });
+    }
+
+    let scoreObtained = 0;
+    let scoreTotal = 0;
+    let studentAnswers = [];
+
+    paper.sections.forEach(section => {
+      section.questions.forEach(question => {
+        const userAnswer = answers[question.questionNumber] || answers[`${question.questionNumber}-blank-0`] || '';
+        studentAnswers.push({
+          questionNumber: question.questionNumber,
+          questionType: question.questionType,
+          userAnswer: userAnswer,
+          correctAnswer: question.correctAnswer || null
+        });
+
+        if (question.questionType === 'multiple-choice') {
+          scoreTotal++;
+          if (userAnswer && userAnswer === question.correctAnswer) {
+            scoreObtained++;
+          }
+        }
+        // For Blank_in_Space, score will be set later manually
+      });
+    });
+
+    const result = new ListeningResult({
+      student: studentId,
+      assignment: assignmentId,
+      paper: id,
+      answers,
+      studentAnswers,
+      score: scoreObtained,
+      scoreTotal,
+      scoreObtained,
+      submittedAt: new Date()
+    });
+
+    await result.save();
+
+    // Update assignment status to completed
+    assignment.status = 'completed';
+    await assignment.save();
+
+    res.status(201).json({
+      message: 'Listening results submitted successfully',
+      result: {
+        id: result._id,
+        score: result.score,
+        submittedAt: result.submittedAt
+      }
+    });
+  } catch (error) {
+    console.error('Submit listening results error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

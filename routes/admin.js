@@ -11,6 +11,9 @@ const ReadingPaper = require('../models/ReadingPaper');
 const ComprehensionQuestion = require('../models/ComprehensionQuestion');
 const LoginSession = require('../models/LoginSession');
 const Agent = require('../models/Agent');
+const ListeningResult = require('../models/ListeningResult');
+const ReadingResult = require('../models/ReadingResult');
+const WritingResult = require('../models/WritingResult');
 
 const router = express.Router();
 
@@ -750,6 +753,7 @@ router.post('/listening-papers/:id/upload-audio', uploadAudio.any(), async (req,
     while (paper.sections.length <= index) {
       paper.sections.push({
         sectionNumber: paper.sections.length + 1,
+        introduction: '',
         audioFile: '',
         audioUrl: '',
         startTime: '00:00',
@@ -1216,6 +1220,175 @@ router.delete('/reading-papers/:id', async (req, res) => {
     res.status(200).json({ message: 'Paper deleted successfully' });
   } catch (error) {
     console.error('Delete reading paper error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get all student results (admin only) - optionally filter by assignment
+router.get('/results', async (req, res) => {
+  try {
+    const { assignment } = req.query;
+
+    let listeningQuery = {};
+    let readingQuery = {};
+    let writingQuery = {};
+
+    if (assignment) {
+      listeningQuery.assignment = assignment;
+      readingQuery.assignment = assignment;
+      writingQuery.assignment = assignment;
+    }
+
+    const [listeningResults, readingResults, writingResults] = await Promise.all([
+      ListeningResult.find(listeningQuery)
+        .populate('student', 'name student_id')
+        .populate({
+          path: 'paper',
+          select: 'title sections',
+          populate: {
+            path: 'sections.questions',
+            model: 'ListeningQuestion'
+          }
+        })
+        .populate('assignment', 'exam_type')
+        .sort({ submittedAt: -1 }),
+      ReadingResult.find(readingQuery)
+        .populate('student', 'name student_id')
+        .populate('paper', 'title questions')
+        .populate('assignment', 'exam_type')
+        .sort({ submittedAt: -1 }),
+      WritingResult.find(writingQuery)
+        .populate('student', 'name student_id')
+        .populate('paper', 'title tasks')
+        .populate('assignment', 'exam_type')
+        .sort({ submittedAt: -1 })
+    ]);
+
+    // Combine all results into a single array with examType
+    const allResults = [
+      ...listeningResults.map(result => ({ ...result.toObject(), examType: 'listening' })),
+      ...readingResults.map(result => ({ ...result.toObject(), examType: 'reading' })),
+      ...writingResults.map(result => ({ ...result.toObject(), examType: 'writing' }))
+    ];
+
+    // Sort by submittedAt descending
+    allResults.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+
+    res.status(200).json({ results: allResults });
+  } catch (error) {
+    console.error('Get results error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update listening result with admin decisions
+router.put('/listening-results/:id/admin-mark', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminDecisions } = req.body; // array of { questionNumber, isCorrect }
+
+    if (!Array.isArray(adminDecisions)) {
+      return res.status(400).json({ error: 'adminDecisions must be an array' });
+    }
+
+    const result = await ListeningResult.findById(id);
+    if (!result) {
+      return res.status(404).json({ error: 'Result not found' });
+    }
+
+    // Update admin decisions
+    adminDecisions.forEach(decision => {
+      const answer = result.studentAnswers.find(a => a.questionNumber === decision.questionNumber);
+      if (answer && answer.questionType === 'Blank_in_Space') {
+        answer.adminMarked = decision.isCorrect;
+      }
+    });
+
+    // Recalculate score
+    let correctCount = 0;
+    result.studentAnswers.forEach(answer => {
+      if (answer.questionType === 'multiple-choice') {
+        // Auto-scored
+        if (answer.userAnswer === answer.correctAnswer) {
+          correctCount++;
+        }
+      } else if (answer.questionType === 'Blank_in_Space') {
+        // Admin marked
+        if (answer.adminMarked === true) {
+          correctCount++;
+        }
+      }
+    });
+
+    result.score = correctCount;
+    result.scoreObtained = correctCount;
+    result.scoreTotal = result.studentAnswers.length;
+    result.status = 'graded';
+    result.gradedBy = req.admin?._id || null; // Assuming admin is authenticated
+    result.gradedAt = new Date();
+
+    await result.save();
+
+    res.status(200).json({
+      message: 'Result updated successfully',
+      result: {
+        _id: result._id,
+        score: result.score,
+        status: result.status,
+        studentAnswers: result.studentAnswers
+      }
+    });
+  } catch (error) {
+    console.error('Update listening result error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update writing result with admin scores
+router.put('/writing-results/:id/admin-score', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminScores } = req.body; // array of { taskNumber, score }
+
+    if (!Array.isArray(adminScores)) {
+      return res.status(400).json({ error: 'adminScores must be an array' });
+    }
+
+    const result = await WritingResult.findById(id);
+    if (!result) {
+      return res.status(404).json({ error: 'Result not found' });
+    }
+
+    // Update admin scores
+    adminScores.forEach(scoreData => {
+      const answer = result.studentAnswers.find(a => a.taskNumber === scoreData.taskNumber);
+      if (answer) {
+        answer.adminScore = scoreData.score;
+      }
+    });
+
+    // Recalculate total score
+    const totalScore = result.studentAnswers.reduce((sum, answer) => sum + (answer.adminScore || 0), 0);
+    result.score = totalScore;
+    result.scoreObtained = totalScore;
+    result.scoreTotal = result.studentAnswers.length * 9; // Max 9 points per task
+    result.status = 'graded';
+    result.gradedBy = req.admin?._id || null;
+    result.gradedAt = new Date();
+
+    await result.save();
+
+    res.status(200).json({
+      message: 'Writing result updated successfully',
+      result: {
+        _id: result._id,
+        score: result.score,
+        status: result.status,
+        studentAnswers: result.studentAnswers
+      }
+    });
+  } catch (error) {
+    console.error('Update writing result error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -14,6 +14,8 @@ const listeningRoutes = require('./routes/listening');
 const speakingRoutes = require('./routes/speaking');
 const writingRoutes = require('./routes/writing');
 const readingRoutes = require('./routes/reading');
+const readingResultsRoutes = require('./routes/reading-results');
+const writingResultsRoutes = require('./routes/writing-results');
 const agentRoutes = require('./routes/agents');
 
 const app = express();
@@ -37,7 +39,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Root route to check API status
 app.get('/', (req, res) => {
-  res.json({ message: 'API is working right now update v 1.0.2' });
+  res.json({ message: 'API is working right now update v 1.1.0' });
 });
 
 // MongoDB connection
@@ -55,6 +57,8 @@ app.use('/exam-assignments', examAssignmentRoutes);
 app.use('/listening', listeningRoutes);
 app.use('/speaking', speakingRoutes); // Student access to speaking papers
 app.use('/reading', readingRoutes); // Student access to reading papers
+app.use('/reading-results', readingResultsRoutes); // Reading results
+app.use('/writing-results', writingResultsRoutes); // Writing results
 app.use('/writing', writingRoutes); // Student access to writing papers
 app.use('/admin/speaking-papers', speakingRoutes); // Admin access
 app.use('/admin/writing-papers', writingRoutes);

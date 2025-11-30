@@ -26,15 +26,20 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Always filter by visible and valid statuses
+    // Always filter by visible
     query.is_visible = true;
-    query.status = { $in: ['assigned', 'in_progress'] };
+    // query.status = { $in: ['assigned', 'in_progress'] }; // Temporarily remove status filter for testing
     console.log('Final query:', query);
+
+    const allAssignments = await ExamAssignment.find({})
+      .populate('student', 'name student_id')
+      .sort({ createdAt: -1 });
+    console.log('All assignments in DB:', allAssignments.length, allAssignments.map(a => ({ _id: a._id, student: a.student?.student_id, exam_type: a.exam_type, status: a.status, is_visible: a.is_visible, exam_paper: a.exam_paper })));
 
     const assignments = await ExamAssignment.find(query)
       .populate('student', 'name student_id')
       .sort({ createdAt: -1 });
-    console.log('Assignments found:', assignments.length, assignments.map(a => ({ _id: a._id, exam_type: a.exam_type, exam_paper: a.exam_paper })));
+    console.log('Filtered assignments found:', assignments.length, assignments.map(a => ({ _id: a._id, exam_type: a.exam_type, status: a.status, exam_paper: a.exam_paper })));
 
     res.status(200).json({ assignments });
   } catch (error) {
