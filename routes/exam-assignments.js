@@ -29,6 +29,15 @@ router.get('/', async (req, res) => {
     // Always filter by visible
     query.is_visible = true;
     // query.status = { $in: ['assigned', 'in_progress'] }; // Temporarily remove status filter for testing
+
+    // Get today's date in IST
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const todayIST = new Date(now.getTime() + istOffset);
+    todayIST.setUTCHours(0, 0, 0, 0);
+    const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60 * 1000);
+    query.exam_date = { $gte: todayIST, $lt: tomorrowIST };
+
     console.log('Final query:', query);
 
     const allAssignments = await ExamAssignment.find({})

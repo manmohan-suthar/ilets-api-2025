@@ -62,10 +62,6 @@ const examAssignmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  startedAt: {
-    type: Date,
-    default: null
-  },
   auto_login_time: {
     type: Date,
     default: null

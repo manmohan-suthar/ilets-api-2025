@@ -17,6 +17,7 @@ const readingRoutes = require('./routes/reading');
 const readingResultsRoutes = require('./routes/reading-results');
 const writingResultsRoutes = require('./routes/writing-results');
 const agentRoutes = require('./routes/agents');
+const instructionsRoutes = require('./routes/instructions');
 
 const app = express();
 const server = http.createServer(app);
@@ -39,7 +40,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Root route to check API status
 app.get('/', (req, res) => {
-  res.json({ message: 'API is working right now update v 1.1.0' });
+  res.json({ message: 'API is working right now update v 2.0.0' });
 });
 
 // MongoDB connection
@@ -64,6 +65,7 @@ app.use('/admin/speaking-papers', speakingRoutes); // Admin access
 app.use('/admin/writing-papers', writingRoutes);
 app.use('/admin/reading-papers', readingRoutes); // Admin access
 app.use('/agents', agentRoutes);
+app.use('/instructions', instructionsRoutes);
 
 // Socket.IO for video call signaling
 io.on('connection', (socket) => {

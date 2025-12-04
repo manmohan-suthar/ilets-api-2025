@@ -14,6 +14,7 @@ const Agent = require('../models/Agent');
 const ListeningResult = require('../models/ListeningResult');
 const ReadingResult = require('../models/ReadingResult');
 const WritingResult = require('../models/WritingResult');
+const Instructions = require('../models/Instructions');
 
 const router = express.Router();
 
@@ -104,16 +105,17 @@ router.post('/start-exam', async (req, res) => {
       return res.status(404).json({ error: 'PC not found' });
     }
 
-    // Get today's date in UTC
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Get today's date in IST
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // IST offset in ms
+    const todayIST = new Date(now.getTime() + istOffset);
+    todayIST.setUTCHours(0, 0, 0, 0);
+    const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60 * 1000);
 
     // Find the assignment for this student for today
     const assignment = await ExamAssignment.findOne({
       student: studentId,
-      exam_date: { $gte: today, $lt: tomorrow },
+      exam_date: { $gte: todayIST, $lt: tomorrowIST },
       examStarted: false
     }).populate('student', 'name student_id');
 
@@ -124,7 +126,6 @@ router.post('/start-exam', async (req, res) => {
     // Assign PC to the assignment and start the exam
     assignment.pc = registration._id;
     assignment.examStarted = true;
-    assignment.startedAt = new Date();
     await assignment.save();
 
     // Assign student to the PC
@@ -153,16 +154,17 @@ router.get('/check-exam-status', async (req, res) => {
       return res.status(200).json({ examStarted: false, hasAssignment: false });
     }
 
-    // Get today's date in UTC
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Get today's date in IST
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const todayIST = new Date(now.getTime() + istOffset);
+    todayIST.setUTCHours(0, 0, 0, 0);
+    const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60 * 1000);
 
     // Check if there's any assignment for this student today
     const anyAssignment = await ExamAssignment.findOne({
       student: studentId,
-      exam_date: { $gte: today, $lt: tomorrow }
+      exam_date: { $gte: todayIST, $lt: tomorrowIST }
     });
 
     // Check for auto-login: if there's an assignment with auto_login_time <= now and not completed, start it
@@ -177,7 +179,6 @@ router.get('/check-exam-status', async (req, res) => {
 
     if (autoLoginAssignment) {
       autoLoginAssignment.examStarted = true;
-      autoLoginAssignment.startedAt = new Date();
       await autoLoginAssignment.save();
     }
 
@@ -442,7 +443,7 @@ router.post('/exam-assignments', async (req, res) => {
       agent: agent || null,
       exam_type,
       exam_paper,
-      exam_date: new Date(exam_date),
+      exam_date: new Date(exam_date + 'T' + exam_time + ':00+05:30'),
       exam_time,
       duration: duration || 60,
       exam_tittle,
@@ -601,9 +602,6 @@ router.put('/exam-assignments/:id', async (req, res) => {
     // Handle date conversions
     if (updates.auto_login_time) {
       updates.auto_login_time = new Date(updates.auto_login_time);
-    }
-    if (updates.startedAt) {
-      updates.startedAt = new Date(updates.startedAt);
     }
 
     const assignment = await ExamAssignment.findByIdAndUpdate(
@@ -859,11 +857,12 @@ router.get('/check-auto-login', async (req, res) => {
     const currentTime = new Date();
     console.log('Current time:', currentTime);
 
-    // Get today's date in UTC
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    // Get today's date in IST
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const todayIST = new Date(now.getTime() + istOffset);
+    todayIST.setUTCHours(0, 0, 0, 0);
+    const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60 * 1000);
 
     // Find scheduled sessions for this PC with today's assignments
     const scheduledSessions = await LoginSession.find({
@@ -871,7 +870,7 @@ router.get('/check-auto-login', async (req, res) => {
       status: 'scheduled'
     }).populate({
       path: 'assignment',
-      match: { exam_date: { $gte: today, $lt: tomorrow } }
+      match: { exam_date: { $gte: todayIST, $lt: tomorrowIST } }
     }).populate('student').sort({ createdAt: 1 });
 
     // Filter out sessions where assignment didn't match (i.e., assignment is null)
@@ -1285,7 +1284,7 @@ router.get('/results', async (req, res) => {
 router.put('/listening-results/:id/admin-mark', async (req, res) => {
   try {
     const { id } = req.params;
-    const { adminDecisions } = req.body; // array of { questionNumber, isCorrect }
+    const { adminDecisions } = req.body; // array of { questionNumber, blankIndex, isCorrect }
 
     if (!Array.isArray(adminDecisions)) {
       return res.status(400).json({ error: 'adminDecisions must be an array' });
@@ -1298,7 +1297,7 @@ router.put('/listening-results/:id/admin-mark', async (req, res) => {
 
     // Update admin decisions
     adminDecisions.forEach(decision => {
-      const answer = result.studentAnswers.find(a => a.questionNumber === decision.questionNumber);
+      const answer = result.studentAnswers.find(a => a.questionNumber === decision.questionNumber && a.blankIndex === decision.blankIndex);
       if (answer && answer.questionType === 'Blank_in_Space') {
         answer.adminMarked = decision.isCorrect;
       }
@@ -1389,6 +1388,59 @@ router.put('/writing-results/:id/admin-score', async (req, res) => {
     });
   } catch (error) {
     console.error('Update writing result error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Instructions CRUD operations
+
+// Get instructions for a category
+router.get('/instructions/:category', async (req, res) => {
+  try {
+    const { category } = req.params;
+
+    if (!['listening', 'reading', 'writing'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
+
+    const instruction = await Instructions.findOne({ category });
+    if (!instruction) {
+      return res.status(200).json({ instruction: { category, content: '' } });
+    }
+
+    res.status(200).json({ instruction });
+  } catch (error) {
+    console.error('Get instructions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Create or update instructions for a category
+router.put('/instructions/:category', async (req, res) => {
+  try {
+    const { category } = req.params;
+    const { content, createdBy } = req.body;
+
+    if (!['listening', 'reading', 'writing'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
+
+    if (!createdBy) {
+      return res.status(400).json({ error: 'createdBy is required' });
+    }
+
+    const instruction = await Instructions.findOneAndUpdate(
+      { category },
+      { content: content || '', createdBy },
+      { new: true, upsert: true }
+    );
+
+    res.status(200).json({
+      message: 'Instructions saved successfully',
+      instruction
+    });
+  } catch (error) {
+    console.error('Save instructions error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

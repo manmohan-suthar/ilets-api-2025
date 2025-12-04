@@ -249,18 +249,33 @@ router.post('/:id/submit-results', async (req, res) => {
 
     paper.sections.forEach(section => {
       section.questions.forEach(question => {
-        const userAnswer = answers[question.questionNumber] || answers[`${question.questionNumber}-blank-0`] || '';
-        studentAnswers.push({
-          questionNumber: question.questionNumber,
-          questionType: question.questionType,
-          userAnswer: userAnswer,
-          correctAnswer: question.correctAnswer || null
-        });
+        if (question.questionType === 'Blank_in_Space') {
+          // Handle multiple blanks for Blank_in_Space questions
+          const blankKeys = Object.keys(answers).filter(key => key.startsWith(`${question.questionNumber}-blank-`)).sort();
+          blankKeys.forEach((key, idx) => {
+            studentAnswers.push({
+              questionNumber: question.questionNumber,
+              questionType: question.questionType,
+              userAnswer: answers[key] || '',
+              correctAnswer: question.correctAnswer || null,
+              blankIndex: idx
+            });
+          });
+        } else {
+          // Handle single answer questions (multiple-choice)
+          const userAnswer = answers[question.questionNumber] || '';
+          studentAnswers.push({
+            questionNumber: question.questionNumber,
+            questionType: question.questionType,
+            userAnswer: userAnswer,
+            correctAnswer: question.correctAnswer || null
+          });
 
-        if (question.questionType === 'multiple-choice') {
-          scoreTotal++;
-          if (userAnswer && userAnswer === question.correctAnswer) {
-            scoreObtained++;
+          if (question.questionType === 'multiple-choice') {
+            scoreTotal++;
+            if (userAnswer && userAnswer === question.correctAnswer) {
+              scoreObtained++;
+            }
           }
         }
         // For Blank_in_Space, score will be set later manually

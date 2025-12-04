@@ -27,6 +27,7 @@ const readingResultSchema = new mongoose.Schema({
     userAnswer: String,
     correctAnswer: String
   }],
+  detailedResults: [mongoose.Schema.Types.Mixed],
   score: {
     type: Number,
     default: null, // calculated later, or for blanks it's manual
