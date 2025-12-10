@@ -25,14 +25,6 @@ const examAssignmentSchema = new mongoose.Schema({
     type: Date,
     required: true
   },
-  exam_time: {
-    type: String, // HH:MM format
-    required: true
-  },
-  duration: {
-    type: Number, // minutes
-    default: 60
-  },
   status: {
     type: String,
     enum: ['assigned', 'in_progress', 'completed', 'cancelled'],

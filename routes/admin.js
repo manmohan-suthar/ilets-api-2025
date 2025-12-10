@@ -1,6 +1,9 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { Upload } = require('@aws-sdk/lib-storage');
+const crypto = require('crypto');
 const Registration = require('../models/Registration');
 const Student = require('../models/Student');
 const ExamAssignment = require('../models/ExamAssignment');
@@ -15,22 +18,21 @@ const ListeningResult = require('../models/ListeningResult');
 const ReadingResult = require('../models/ReadingResult');
 const WritingResult = require('../models/WritingResult');
 const Instructions = require('../models/Instructions');
+console.log(process.env.AWS_REGION)
+// Configure AWS S3 client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
 
 const router = express.Router();
 
-// Multer configuration for audio uploads
-const audioStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/audio/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'audio-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Multer configuration for audio uploads (memory storage for S3)
 const uploadAudio = multer({
-  storage: audioStorage,
+  storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('audio/')) {
       cb(null, true);
@@ -43,19 +45,9 @@ const uploadAudio = multer({
   }
 });
 
-// Multer configuration for photo uploads
-const photoStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/photos/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'photo-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Multer configuration for photo uploads (memory storage for S3)
 const uploadPhoto = multer({
-  storage: photoStorage,
+  storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -67,6 +59,7 @@ const uploadPhoto = multer({
     fileSize: 5 * 1024 * 1024 // 5MB limit
   }
 });
+
 
 // Get all registrations (admin only)
 router.get('/registrations', async (req, res) => {
@@ -198,8 +191,6 @@ router.get('/check-exam-status', async (req, res) => {
           exam_type: assignment.exam_type,
           exam_paper: assignment.exam_paper,
           exam_date: assignment.exam_date,
-          exam_time: assignment.exam_time,
-          duration: assignment.duration,
           exam_tittle: assignment.exam_tittle,
           exam_bio: assignment.exam_bio
         }
@@ -337,18 +328,39 @@ router.delete('/students/:id', async (req, res) => {
   }
 });
 
-// Upload photo
+// Upload photo to S3
 router.post('/upload-photo', uploadPhoto.single('photo'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No photo file provided' });
     }
 
-    const photoUrl = `http://localhost:3001/${req.file.path}`;
+    // Generate unique filename
+    const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(6).toString('hex');
+    const fileExtension = path.extname(req.file.originalname);
+    const key = `photos/photo-${uniqueSuffix}${fileExtension}`;
+
+    // Upload to S3
+    const upload = new Upload({
+      client: s3Client,
+      params: {
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
+      
+      },
+    });
+
+    const result = await upload.done();
+
+    // Construct the public URL
+    const photoUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
     res.status(200).json({ photoUrl });
   } catch (error) {
     console.error('Upload photo error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to upload photo to S3' });
   }
 });
 
@@ -385,9 +397,9 @@ router.get('/exam-papers/:type', async (req, res) => {
 // Create exam assignment
 router.post('/exam-assignments', async (req, res) => {
   try {
-    const { student, agent, exam_type, exam_paper, exam_date, exam_time, duration, exam_tittle, exam_bio, auto_login_time, is_visible } = req.body;
+    const { student, agent, exam_type, exam_paper, exam_date, exam_tittle, exam_bio, auto_login_time, is_visible } = req.body;
 
-    if (!student || !exam_type || !exam_paper || !exam_date || !exam_time || !exam_tittle || !exam_bio) {
+    if (!student || !exam_type || !exam_paper || !exam_date || !exam_tittle || !exam_bio) {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
@@ -443,9 +455,7 @@ router.post('/exam-assignments', async (req, res) => {
       agent: agent || null,
       exam_type,
       exam_paper,
-      exam_date: new Date(exam_date + 'T' + exam_time + ':00+05:30'),
-      exam_time,
-      duration: duration || 60,
+      exam_date: new Date(exam_date),
       exam_tittle,
       exam_bio,
       auto_login_time: auto_login_time ? new Date(auto_login_time) : null,
@@ -759,18 +769,45 @@ router.post('/listening-papers/:id/upload-audio', uploadAudio.any(), async (req,
       });
     }
 
-    // Update the specific section with the audio file path
-    paper.sections[index].audioFile = audioFile.path;
+    // Generate unique filename
+    const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(6).toString('hex');
+    const fileExtension = path.extname(audioFile.originalname);
+    const key = `audio/audio-${uniqueSuffix}${fileExtension}`;
+
+    // Upload to S3
+    const upload = new Upload({
+      client: s3Client,
+      params: {
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: key,
+        Body: audioFile.buffer,
+        ContentType: audioFile.mimetype,
+      },
+    });
+
+    const result = await upload.done();
+
+    // Construct the public URL
+    const audioUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+    // Update the specific section with the audio URL
+    paper.sections[index].audioUrl = audioUrl;
+
+    // Mark the sections array as modified to ensure it gets saved
+    paper.markModified('sections');
     await paper.save();
+
+    // Refresh the paper object to ensure we return the latest saved version
+    const updatedPaper = await ListeningPaper.findById(id);
 
     res.status(200).json({
       message: 'Audio uploaded successfully',
-      paper,
-      audioFile: audioFile.path
+      paper: updatedPaper,
+      audioUrl
     });
   } catch (error) {
     console.error('Upload audio error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to upload audio to S3' });
   }
 });
 
