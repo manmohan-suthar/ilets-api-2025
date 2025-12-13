@@ -20,11 +20,14 @@ const agentRoutes = require('./routes/agents');
 const instructionsRoutes = require('./routes/instructions');
 
 const app = express();
+app.use(express.json({ limit: "500mb" }));
+app.use(express.urlencoded({ extended: true, limit: "500mb" }));
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    allowedHeaders: "Content-Type, Authorization"
   }
 });
 const PORT = process.env.PORT || 3001;
@@ -40,7 +43,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Root route to check API status
 app.get('/', (req, res) => {
-  res.json({ message: 'API is working right now update v 2.0.0' });
+  res.json({ message: 'API is working right now update v1.0.1' });
 });
 
 // MongoDB connection

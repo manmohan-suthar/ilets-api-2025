@@ -41,6 +41,11 @@ const readingPassageSchema = new mongoose.Schema({
   localIndex: {
     type: Number,
     default: 0
+  },
+  sectionInstructions: {
+    type: String,
+    default: 'Read the text below and answer the questions.',
+    required: true
   }
 });
 
@@ -52,10 +57,6 @@ const readingQuestionSchema = new mongoose.Schema({
   },
   // Common fields
   question: {
-    type: String,
-    default: ''
-  },
-  instructions: {
     type: String,
     default: ''
   },

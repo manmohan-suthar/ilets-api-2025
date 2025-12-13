@@ -18,7 +18,7 @@ const ListeningResult = require('../models/ListeningResult');
 const ReadingResult = require('../models/ReadingResult');
 const WritingResult = require('../models/WritingResult');
 const Instructions = require('../models/Instructions');
-console.log(process.env.AWS_REGION)
+
 // Configure AWS S3 client
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
@@ -29,6 +29,9 @@ const s3Client = new S3Client({
 });
 
 const router = express.Router();
+
+
+
 
 // Multer configuration for audio uploads (memory storage for S3)
 const uploadAudio = multer({
@@ -41,7 +44,7 @@ const uploadAudio = multer({
     }
   },
   limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB limit
+    fileSize: 500 * 1024 * 1024 // 500MB limit
   }
 });
 
@@ -56,7 +59,22 @@ const uploadPhoto = multer({
     }
   },
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+    fileSize: 200 * 1024 * 1024 // 200MB limit
+  }
+});
+
+// Multer configuration for writing paper image uploads (memory storage for S3)
+const uploadWritingImage = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  },
+  limits: {
+    fileSize: 200 * 1024 * 1024 // 200MB limit
   }
 });
 
@@ -138,71 +156,75 @@ router.get('/check-exam-status', async (req, res) => {
     const { macAddress, studentId } = req.query;
 
     if (!macAddress || !studentId) {
-      return res.status(400).json({ error: 'macAddress and studentId are required' });
+      return res.status(400).json({
+        error: 'macAddress and studentId are required',
+      });
     }
 
-    // Find the registration
+    // ✅ Find PC registration
     const registration = await Registration.findOne({ macAddress });
     if (!registration) {
-      return res.status(200).json({ examStarted: false, hasAssignment: false });
-    }
-
-    // Get today's date in IST
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const todayIST = new Date(now.getTime() + istOffset);
-    todayIST.setUTCHours(0, 0, 0, 0);
-    const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60 * 1000);
-
-    // Check if there's any assignment for this student today
-    const anyAssignment = await ExamAssignment.findOne({
-      student: studentId,
-      exam_date: { $gte: todayIST, $lt: tomorrowIST }
-    });
-
-    // Check for auto-login: if there's an assignment with auto_login_time <= now and not completed, start it
-    const currentTime = new Date();
-    const autoLoginAssignment = await ExamAssignment.findOne({
-      student: studentId,
-      pc: registration._id,
-      auto_login_time: { $lte: currentTime },
-      status: { $ne: 'completed' },
-      examStarted: false
-    });
-
-    if (autoLoginAssignment) {
-      autoLoginAssignment.examStarted = true;
-      await autoLoginAssignment.save();
-    }
-
-    // Find if there's a started exam for this student and PC
-    const assignment = await ExamAssignment.findOne({
-      student: studentId,
-      pc: registration._id,
-      examStarted: true
-    }).populate('pc student', 'name student_id');
-
-    if (assignment) {
-      res.status(200).json({
-        examStarted: true,
-        hasAssignment: true,
-        assignment: {
-          _id: assignment._id,
-          exam_type: assignment.exam_type,
-          exam_paper: assignment.exam_paper,
-          exam_date: assignment.exam_date,
-          exam_tittle: assignment.exam_tittle,
-          exam_bio: assignment.exam_bio
-        }
+      return res.status(200).json({
+        examStarted: false,
+        hasAssignment: false,
       });
-    } else {
-      res.status(200).json({ examStarted: false, hasAssignment: !!anyAssignment });
     }
+
+    // ✅ Get ALL assignments for this STUDENT + THIS PC
+    const assignments = await ExamAssignment.find({
+      student: studentId,
+      pc: registration._id,
+      is_visible: true,
+    }).sort({ createdAt: 1 });
+
+    if (!assignments.length) {
+      return res.status(200).json({
+        examStarted: false,
+        hasAssignment: false,
+      });
+    }
+
+    // ✅ Find FIRST assignment which is NOT completed
+    const activeAssignment = assignments.find(
+      (a) => a.status !== 'completed'
+    );
+
+    // ✅ If all assignments are completed
+    if (!activeAssignment) {
+      return res.status(200).json({
+        examStarted: false,
+        allCompleted: true,
+      });
+    }
+
+    // ✅ Auto start exam if not started yet
+    if (!activeAssignment.examStarted) {
+      activeAssignment.examStarted = true;
+      await activeAssignment.save();
+    }
+
+    // ✅ Return ONLY active (non-completed) assignment
+    return res.status(200).json({
+      examStarted: true,
+      hasAssignment: true,
+      assignment: {
+        _id: activeAssignment._id,
+        exam_type: activeAssignment.exam_type,
+        exam_paper: activeAssignment.exam_paper,
+        exam_date: activeAssignment.exam_date,
+        exam_tittle: activeAssignment.exam_tittle,
+        exam_bio: activeAssignment.exam_bio,
+        status: activeAssignment.status,
+      },
+    });
   } catch (error) {
     console.error('Check exam status error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      error: 'Internal server error',
+    });
   }
 });
+
 
 // Update student role (admin only)
 router.put('/students/:id/role', async (req, res) => {
@@ -358,12 +380,51 @@ router.post('/upload-photo', uploadPhoto.single('photo'), async (req, res) => {
     const photoUrl = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
     res.status(200).json({ photoUrl });
-  } catch (error) {
-    console.error('Upload photo error:', error);
-    res.status(500).json({ error: 'Failed to upload photo to S3' });
-  }
-});
-
+    } catch (error) {
+      console.error('Upload photo error:', error);
+      res.status(500).json({ error: 'Failed to upload photo to S3' });
+    }
+  });
+  
+  // Upload image for writing paper to S3
+  router.post("/uploads/image", uploadWritingImage.single("image"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No image file provided" });
+      }
+  
+      const prefix = (req.body.prefix || "editor-images").replace(/[^a-zA-Z0-9/_-]/g, "");
+      const unique = Date.now() + "-" + crypto.randomBytes(6).toString("hex");
+      const ext = path.extname(req.file.originalname) || "";
+      const key = `${prefix}/${unique}${ext}`;
+  
+      const uploader = new Upload({
+        client: s3Client,
+        params: {
+          Bucket: process.env.S3_BUCKET_NAME,
+          Key: key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+          // If your bucket is not already public-read via bucket policy, uncomment:
+          // ACL: "public-read",
+          CacheControl: "public, max-age=31536000, immutable",
+          ContentDisposition: "inline",
+        },
+      });
+  
+      await uploader.done();
+  
+      const url = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+  
+      return res.status(200).json({
+        message: "Image uploaded successfully",
+        image: { url, path: key, originalName: req.file.originalname },
+      });
+    } catch (err) {
+      console.error("Upload image error:", err);
+      return res.status(500).json({ error: "Failed to upload image to S3" });
+    }
+  });
 // Get exam papers by type
 router.get('/exam-papers/:type', async (req, res) => {
   try {
@@ -1147,11 +1208,44 @@ router.post('/reading-papers', async (req, res) => {
       return res.status(400).json({ error: 'Title and createdBy are required' });
     }
 
+    // Validate that passages have sectionInstructions
+    if (passages && passages.length > 0) {
+      for (const passage of passages) {
+        if (!passage.sectionInstructions && !passage.instructions) {
+          return res.status(400).json({ error: 'Each passage must have sectionInstructions' });
+        }
+      }
+    }
+
+    // Remove instructions from questions and ensure they're only at section/passage level
+    const cleanedQuestions = questions ? questions.map(question => {
+      const { instructions, ...rest } = question;
+      return rest;
+    }) : [];
+
+    // Ensure passages have section-level instructions
+    const processedPassages = passages ? passages.map(passage => {
+      // If sectionInstructions is not provided, use instructions as fallback
+      if (!passage.sectionInstructions && passage.instructions) {
+        return { ...passage, sectionInstructions: passage.instructions };
+      }
+      return passage;
+    }) : [];
+
+    // Validate and ensure proper index structure
+    const validatedPassages = processedPassages.map((passage, index) => ({
+      ...passage,
+      order: passage.order || index,
+      globalIndex: passage.globalIndex || index,
+      localIndex: passage.localIndex || 0,
+      unitNumber: passage.unitNumber || (index + 1)
+    }));
+
     const paper = new ReadingPaper({
       title,
       description,
-      passages: passages || [],
-      questions: questions || [],
+      passages: validatedPassages,
+      questions: cleanedQuestions,
       status: status || 'draft',
       estimatedTime: estimatedTime || 60,
       createdBy
@@ -1188,6 +1282,13 @@ router.post('/reading-papers', async (req, res) => {
     res.status(201).json({ message: 'Paper created successfully', paper });
   } catch (error) {
     console.error('Create reading paper error:', error);
+    if (error.name === 'ValidationError') {
+      const validationErrors = [];
+      for (const field in error.errors) {
+        validationErrors.push(error.errors[field].message);
+      }
+      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1196,7 +1297,55 @@ router.post('/reading-papers', async (req, res) => {
 router.put('/reading-papers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    let updates = req.body;
+
+    // Validate that passages have sectionInstructions
+    if (updates.passages && updates.passages.length > 0) {
+      for (const passage of updates.passages) {
+        if (!passage.sectionInstructions && !passage.instructions) {
+          return res.status(400).json({ error: 'Each passage must have sectionInstructions' });
+        }
+      }
+    }
+
+    // Clean up instructions from questions before saving
+    if (updates.questions) {
+      updates = {
+        ...updates,
+        questions: updates.questions.map(question => {
+          const { instructions, ...rest } = question;
+          return rest;
+        })
+      };
+    }
+
+    // Ensure passages have section-level instructions
+    if (updates.passages) {
+      updates = {
+        ...updates,
+        passages: updates.passages.map(passage => {
+          // If sectionInstructions is not provided, use instructions as fallback
+          if (!passage.sectionInstructions && passage.instructions) {
+            return { ...passage, sectionInstructions: passage.instructions };
+          }
+          return passage;
+        })
+      };
+    }
+
+    // Validate and ensure proper index structure for updated passages
+    if (updates.passages) {
+      updates = {
+        ...updates,
+        passages: updates.passages.map((passage, index) => ({
+          ...passage,
+          order: passage.order || index,
+          globalIndex: passage.globalIndex || index,
+          localIndex: passage.localIndex || 0,
+          unitNumber: passage.unitNumber || (index + 1)
+        }))
+      };
+    }
 
     const paper = await ReadingPaper.findByIdAndUpdate(id, updates, { new: true });
     if (!paper) {
@@ -1236,6 +1385,13 @@ router.put('/reading-papers/:id', async (req, res) => {
     res.status(200).json({ message: 'Paper updated successfully', paper });
   } catch (error) {
     console.error('Update reading paper error:', error);
+    if (error.name === 'ValidationError') {
+      const validationErrors = [];
+      for (const field in error.errors) {
+        validationErrors.push(error.errors[field].message);
+      }
+      return res.status(400).json({ error: 'Validation failed', details: validationErrors });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
